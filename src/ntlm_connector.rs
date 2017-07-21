@@ -122,8 +122,9 @@ impl Service for NtlmProxyConnector {
                     .call(self.proxy_addr.clone())
                     .and_then(move |conn| Tunnel::new(conn, host_copy, port))
                     .and_then(move |tunn| tls.connect_async(host.as_str(), tunn)
-                              .map_err(|_| io::Error::new(io::ErrorKind::ConnectionAborted,
-                                                          "tunnel failed to connect")))
+                              .map_err(|_| io::Error::new(
+                                      io::ErrorKind::ConnectionAborted,
+                                      "tunnel failed to connect")))
                     .map(ConnectionType::Proxied))
             },
             _ => {
@@ -190,8 +191,7 @@ impl<T> Tunnel<T>
             },
             Err(error) => {
                 self.state = Some(TunnelState::Failure(
-                    io::Error::new(io::ErrorKind::Other,
-                                   error.description().to_owned())));
+                    io::Error::new(io::ErrorKind::Other, error.description().to_owned())));
                 return StateTransition::Error;
             }
         };
@@ -218,8 +218,7 @@ impl<T> Tunnel<T>
             },
             Err(error) => {
                 self.state = Some(TunnelState::Failure(
-                    io::Error::new(io::ErrorKind::Other,
-                                   error.description().to_owned())));
+                    io::Error::new(io::ErrorKind::Other, error.description().to_owned())));
                 return StateTransition::Error;
             }
         };
@@ -319,8 +318,7 @@ impl<T> Tunnel<T>
             },
             Err(error) => {
                 self.state = Some(TunnelState::Failure(
-                    io::Error::new(io::ErrorKind::Other,
-                                   error.description().to_owned())));
+                    io::Error::new(io::ErrorKind::Other, error.description().to_owned())));
                 return StateTransition::Error;
             }
         };
@@ -346,8 +344,7 @@ impl<T> Tunnel<T>
             },
             Err(error) => {
                 self.state = Some(TunnelState::Failure(
-                    io::Error::new(io::ErrorKind::Other,
-                                   error.description().to_owned())));
+                    io::Error::new(io::ErrorKind::Other, error.description().to_owned())));
                 return StateTransition::Error;
             }
         };
