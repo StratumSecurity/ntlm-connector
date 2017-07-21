@@ -1,5 +1,5 @@
 [package]
-name = "ntlm_connector"
+name = "ntlm-connector"
 version = "0.1.0"
 authors = [
   "Zack Mullaly <zack.mullaly@stratumsecurity.com>",
