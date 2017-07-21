@@ -97,7 +97,6 @@ impl NtlmProxyConnector {
         let https = HttpsConnector::from((http, tls.clone()));
         let tls = Arc::new(tls);
 
-        println!("Constructed NtlmProxyConnector");
         NtlmProxyConnector {
             https: https,
             proxy_addr: proxy_uri,
@@ -115,7 +114,6 @@ impl Service for NtlmProxyConnector {
     fn call(&self, uri: Uri) -> Self::Future {
         match uri.scheme() {
             Some("https") => {
-                println!("Got an HTTPS request");
                 let host = uri.host().unwrap().to_owned();
                 let port = uri.port().unwrap_or(443);
                 let tls = self.tls.clone();
@@ -129,7 +127,6 @@ impl Service for NtlmProxyConnector {
                     .map(ConnectionType::Proxied))
             },
             _ => {
-                println!("Got an HTTP request");
                 Box::new(self.https
                     .call(self.proxy_addr.clone())
                     .map(ConnectionType::Normal))
@@ -165,7 +162,6 @@ impl<T> Tunnel<T>
                 return StateTransition::Error;
             }
         };
-        println!("In begin_ntlm_handshake, created NTLM context");
         let negotiate_bytes = match sspi.next_bytes(None) {
             Ok(Some(bytes)) => bytes,
             Ok(None) => {
@@ -180,7 +176,6 @@ impl<T> Tunnel<T>
             }
         };
         let negotiation = base64::encode(&*negotiate_bytes);
-        println!("Got initial NTLM handshake bytes {}", negotiation);
         let request_content = format!(
             "CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\nProxy-Authorization: NTLM {neg}\r\n\r\n",
             host=self.host,
@@ -201,13 +196,10 @@ impl<T> Tunnel<T>
             }
         };
         if !self.buf.has_remaining_mut() && bytes_written > 0 {
-            println!("Successfully wrote first request");
             self.state = Some(TunnelState::ReadChallenge(Box::new(sspi)));
-            println!("Updated state");
             self.buf.get_mut().truncate(0);
             StateTransition::Continue
         } else {
-            println!("Failed to write first request");
             self.state = Some(TunnelState::Failure(
                 io::Error::new(io::ErrorKind::UnexpectedEof, String::from("unexpected EOF while tunneling"))));
             StateTransition::Error
@@ -218,16 +210,13 @@ impl<T> Tunnel<T>
     /// succeed and a status 200 to be returned, indicating that we don't need to do an NTLM
     /// handshake at all, or for a status 407 to be returned with an NTLM challenge.
     fn read_challenge(&mut self, ntlm_ctx: Box<NextBytes>) -> StateTransition {
-        println!("Attempting to read challenge");
         let bytes_read = match self.conn.as_mut().unwrap().read_buf(&mut self.buf.get_mut()) {
             Ok(Async::Ready(bytes_read)) => bytes_read,
             Ok(Async::NotReady) => { 
-                println!("Not ready to read bytes");
                 self.state = Some(TunnelState::ReadChallenge(ntlm_ctx));
                 return StateTransition::NotReady;
             },
             Err(error) => {
-                println!("Encountered error reading bytes {:?}", error);
                 self.state = Some(TunnelState::Failure(
                     io::Error::new(io::ErrorKind::Other,
                                    error.description().to_owned())));
@@ -235,7 +224,6 @@ impl<T> Tunnel<T>
             }
         };
         let read = &self.buf.get_ref()[..].to_owned();
-        println!("Read {} bytes", bytes_read);
         if bytes_read == 0 {
             self.state = Some(TunnelState::Failure(
                 io::Error::new(io::ErrorKind::UnexpectedEof, String::from("unexpected EOF while tunneling"))));
@@ -254,15 +242,12 @@ impl<T> Tunnel<T>
         // any more work and can move straight to the final `Done` state.
         let end = b"\r\n\r\n";
         if read.starts_with(b"HTTP/1.0 407") || read.starts_with(b"HTTP/1.1 407") {
-            println!("Read status 407");
             let mut headers = [httparse::EMPTY_HEADER; 32]; // Just have to hope the response has <= 32 headers.
             let mut response = httparse::Response::new(&mut headers);
             let finished = response.parse(read)
                 .map(|result| result.is_complete() && finished_reading_http(&mut response, read))
                 .unwrap_or(false);
             if finished {
-                println!("Read challenge response");
-                println!("{}", String::from_utf8_lossy(read));
                 let res = String::from_utf8_lossy(read);
                 let parts: Vec<&str> = res.split(NTLM_CHLG_HDR_PREFIX).collect();
                 if parts.len() < 2 {
@@ -272,30 +257,23 @@ impl<T> Tunnel<T>
                 }
                 let parts: Vec<&str> = parts[1].split("\r\n").collect();
                 let challenge = NtlmChallenge(parts[0].trim().to_owned());
-                println!("Got challenge {:?}", challenge);
                 self.state = Some(TunnelState::WriteResponse(challenge, ntlm_ctx));
-                println!("Successfully parsed NTLM challenge");
                 StateTransition::Continue
             } else {
                 // Else (do nothing to) stay in the current state to read more.
                 self.state = Some(TunnelState::ReadChallenge(ntlm_ctx));
-                println!("Going to try to read to end of 407 response");
                 StateTransition::Continue
             }
         } else if read.starts_with(b"HTTP/1.0 200") || read.starts_with(b"HTTP/1.1 200") {
-            println!("Read status 200");
             if read.ends_with(end) {
-                println!("Looks like we don't need to do NTLM handshake");
                 self.state = Some(TunnelState::Done);
                 StateTransition::Continue
             } else {
                 // Else (do nothing to) stay in the current state to read more.
                 self.state = Some(TunnelState::ReadChallenge(ntlm_ctx));
-                println!("Going to try to read to end of 200 response");
                 StateTransition::Continue
             }
         } else {
-            println!("Error reading challenge response");
             self.state = Some(TunnelState::Failure(
                 io::Error::new(io::ErrorKind::ConnectionRefused, String::from("unsuccessful tunnel setup"))));
             StateTransition::Error
@@ -313,7 +291,6 @@ impl<T> Tunnel<T>
                 return StateTransition::Error;
             }
         };
-        println!("Decoded challenge");
         let auth_response = match ntlm_ctx.as_mut().next_bytes(Some(&decoded)) {
             Ok(Some(auth)) => auth,
             Ok(None) => {
@@ -328,7 +305,6 @@ impl<T> Tunnel<T>
             }
         };
         let challenge_response = base64::encode(&*auth_response);
-        println!("Produced response to challenge {:?}", challenge_response);
         let response = format!(
             "CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\nProxy-Authorization: NTLM {res}\r\n\r\n",
             host=self.host,
@@ -349,12 +325,10 @@ impl<T> Tunnel<T>
             }
         };
         if !self.buf.has_remaining_mut() && bytes_written > 0 {
-            println!("Successfully wrote challenge response");
             self.state = Some(TunnelState::ReadConfirm);
             self.buf.get_mut().truncate(0);
             StateTransition::Continue
         } else {
-            println!("Failed to write challenge response");
             self.state = Some(TunnelState::Failure(
                 io::Error::new(io::ErrorKind::UnexpectedEof, String::from("unexpected EOF while tunneling"))));
             StateTransition::Error
@@ -388,13 +362,10 @@ impl<T> Tunnel<T>
                 io::Error::new(io::ErrorKind::InvalidData, String::from("did not read enough bytes"))));
             return StateTransition::Error;
         }
-        println!("verify_handshake_completed read {}", String::from_utf8_lossy(read));
         if read.starts_with(b"HTTP/1.0 200") || read.starts_with(b"HTTP/1.1 200") {
-            println!("Verified that the handshake completed");
             self.state = Some(TunnelState::Done);
             StateTransition::Continue
         } else {
-            println!("Handshake verification failed");
             self.state = Some(TunnelState::Failure(
                 io::Error::new(io::ErrorKind::ConnectionRefused, String::from("proxy did not accept challenge response"))));
             StateTransition::Error
@@ -411,9 +382,7 @@ impl<T> Future for Tunnel<T>
     /// Handles state transitions for authenticating to an NTLM proxy.
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
-            println!("At top of tunnel.poll");
             if self.state.is_none() {
-                println!("Tunnel state is none");
                 return Ok(Async::NotReady);
             }
             // Note about state transitions:
@@ -432,7 +401,6 @@ impl<T> Future for Tunnel<T>
             // so we don't need to handle that here (it gets handled above).
             // Likewise, if the status is `Continue`, we can just let the loop go ahead and run again.
             if state_trans_status == StateTransition::NotReady {
-                println!("Tunnel is not ready");
                 return Ok(Async::NotReady);
             }
         }
