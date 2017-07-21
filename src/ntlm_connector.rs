@@ -35,6 +35,8 @@ pub struct NtlmProxyConnector {
 type HttpStream = <HttpConnector as Service>::Response;
 type HttpsStream = MaybeHttpsStream<HttpStream>;
 
+/// The result of evaluating a `Connecting` future, which handles the reading and
+/// writing of bytes through a proxy tunnel or for unproxied requests.
 pub enum ConnectionType {
     Normal(HttpsStream),
     Proxied(TlsStream<MaybeHttpsStream<HttpStream>>),
@@ -48,7 +50,7 @@ pub enum ConnectionType {
 /// don't bother trying to read it.
 struct Tunnel<T> {
     buf: Cursor<Vec<u8>>,
-    conn: Option<T>, // Stored in an option so we can .take() ownership of it later.
+    conn: Option<T>,
     state: Option<TunnelState>,
     host: String,
     port: u16,
@@ -59,7 +61,8 @@ struct NtlmChallenge(pub String);
 
 /// Represents the states of the tunnel establishing process.
 ///
-/// We expect the states to transition from `WritingInitial` to `ReadingChallenge` to `WritingResponse`.
+/// We expect the states to transition from `WriteInitial` to `ReadChallenge` to `WriteResponse` to
+/// `ReadConfirm` and then finally to `Done`.
 /// The `Failure` state should be jumped to as soon as an error occurs.
 ///
 /// In order to complete the NTLM authentication process, the SSPI context has to be passed between the
@@ -151,6 +154,8 @@ impl<T> Tunnel<T>
         }
     }
 
+    /// Sends a first CONNECT request to begin a TLS handshake, and includes an NTLM negotiation
+    /// header to prompt the proxy for a challenge.
     fn begin_ntlm_handshake(&mut self) -> StateTransition {
         let mut sspi = match NtlmSspiBuilder::new().build() {
             Ok(ntlm_ctx) => ntlm_ctx,
@@ -209,6 +214,9 @@ impl<T> Tunnel<T>
         }
     }
 
+    /// Reads the response to the first CONNECT request, expecting either for the request to
+    /// succeed and a status 200 to be returned, indicating that we don't need to do an NTLM
+    /// handshake at all, or for a status 407 to be returned with an NTLM challenge.
     fn read_challenge(&mut self, ntlm_ctx: Box<NextBytes>) -> StateTransition {
         println!("Attempting to read challenge");
         let bytes_read = match self.conn.as_mut().unwrap().read_buf(&mut self.buf.get_mut()) {
@@ -253,7 +261,6 @@ impl<T> Tunnel<T>
                 .map(|result| result.is_complete() && finished_reading_http(&mut response, read))
                 .unwrap_or(false);
             if finished {
-            //if finished_reading_http(&read) {
                 println!("Read challenge response");
                 println!("{}", String::from_utf8_lossy(read));
                 let res = String::from_utf8_lossy(read);
@@ -295,6 +302,7 @@ impl<T> Tunnel<T>
         }
     }
 
+    /// Sends another CONNECT request, this time with a response to the proxy's NTLM challenge.
     fn respond_to_challenge(&mut self, ch: NtlmChallenge, mut ntlm_ctx: Box<NextBytes>) -> StateTransition {
         let challenge = ch.0;
         let decoded = match base64::decode(challenge.as_str()) {
@@ -353,6 +361,8 @@ impl<T> Tunnel<T>
         }
     }
 
+    /// Reads the proxy's response to the second CONNECT request, checking for status 200
+    /// indicating that the NTLM handshake was completed successfully.
     fn verify_handshake_completed(&mut self) -> StateTransition {
         let bytes_read = match self.conn.as_mut().unwrap().read_buf(&mut self.buf.get_mut()) {
             Ok(Async::Ready(read)) => read,
